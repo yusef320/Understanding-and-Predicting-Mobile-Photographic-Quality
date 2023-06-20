@@ -1,0 +1,148 @@
+---
+title: "Limpieza y tratamiento de los datos."
+output: html_notebook
+---
+
+```{r}
+library(Matrix)
+```
+
+### PREPARACIÓN E INTRODUCCIÓN DE LOS DATOS
+
+Incluimos el fichero y llevamos acabo la descripcion de las variables, indicando el tipo de cada una, eliminando las inecesarias o transformando a las que lo requerían. Posteriormente nos damos cuenta de un error en los valores nulos ya que se les toma como una categoría por lo que sustituimos cada uno de los valores en blanco por valores NA para facilitar el trabajo de investigación de las variables.
+
+```{r INTRODUCCION DATOS, warning  = FALSE}
+data=read.csv("dxo_and_specs.csv", sep = ";", as.is = TRUE)
+#dim(data)
+data$Sensor_1[data$Sensor_1== ''] = NA
+data$Tipo_1[data$Tipo_1== ''] = NA
+data$TamaÃ.o_pixel_1[data$TamaÃ.o_pixel_1 == ''] = NA
+data$TamaÃ.o_pixel_1[data$TamaÃ.o_pixel_1 == "--"] = NA
+data$TamaÃ.o_sensor_1[data$TamaÃ.o_sensor_1 == ''] = NA
+data$Tipo_camara_2[data$Tipo_camara_2 == ''] = NA
+data$Resolucion_2[data$Resolucion_2 == ''] = NA
+data$Sensor_2[data$Sensor_2== ''] = NA
+data$Tipo_2[data$Tipo_2== ''] = NA
+data$Apertura_2[data$TamaÃ.o_pixel_2 == ''] = NA
+data$TamaÃ.o_pixel_2[data$TamaÃ.o_pixel_2 == ''] = NA
+data$TamaÃ.o_pixel_2[data$TamaÃ.o_pixel_2 == '--'] = NA
+data$TamaÃ.o_sensor_2[data$TamaÃ.o_sensor_2 == ''] = NA
+data$Tipo_3[data$Tipo_3== ''] = NA
+data$Tipo_3[data$Tipo_3== '--'] = NA
+data$Tipo_camara_3[data$Tipo_camara_3 == ''] = NA
+data$Resolucion_3[data$Resolucion_3 == ''] = NA
+data$Sensor_3[data$Sensor_3 == ''] = NA
+data$Apertura_3[data$Apertura_3 == ''] = NA
+data$TamaÃ.o_pixel_3[data$TamaÃ.o_pixel_3 == ''] = NA
+data$TamaÃ.o_pixel_3[data$TamaÃ.o_pixel_3== '--'] = NA
+data$TamaÃ.o_sensor_3[data$TamaÃ.o_sensor_3 == ''] = NA
+
+
+
+descData = data.frame("variable" = colnames(data),
+"tipo" = c("text", rep("numerical", 22), "categorical", rep("numerical", 3),
+"categorical", "numerical", "categorical", rep("numerical", 3), "categorical",
+"numerical", "categorical", "numerical", "categorical", "numerical",
+"categorical", "numerical", rep("categorical", 2), rep("numerical", 3),
+"categorical", "numerical", rep("categorical",2),
+rep("numerical", 3),
+"categorical", "numerical", rep("categorical",2), rep("numerical", 3),
+"binary"), stringsAsFactors = FALSE)
+
+rownames(descData) = descData$variable
+
+data2 =data[, -c(1, 40)] #quitamos Tipo_camara_1 debido a que tiene miso valor en todas las filas
+rownames(data2) = data[,1]
+descData = descData[-c(1, 40),]
+data[,c(42:44, 46, 49:51, 53, 56:58)] <- lapply(data[,c(42:44, 46, 49:51, 53, 56:58)], as.integer)
+
+data2$Estabilizacion_optica[data2$Estabilizacion_optica == "True"] <- 1
+data2$Estabilizacion_optica[data2$Estabilizacion_optica== "False"] <- 0
+data2$Estabilizacion_optica <- as.logical(as.integer(data2$Estabilizacion_optica))
+data2$Estabilizacion_optica  = as.numeric(data2$Estabilizacion_optica)
+head(data2)
+descData
+table(descData$tipo)
+```
+
+### SIGNIFICACIÓN DE LAS VARIABLES
+
+Estudiamos tanto las variables numéricas como las categóricas, en este caso en las numéricas tratando de buscar valores muy similares a la media o que giran sobre el mismo rango de valores significando que las variables no son relevantes... En este caso no encontramos variables no significativas
+
+```{r}
+summary(data2[,descData$variable[descData$tipo == "numerical"]])
+```
+
+De la misma manera buscamos en las categóricas aquellas que posean un número de categorias excedido para el númer de valores que estamos tratando, decidimos no eliminar tampoco ninguna.
+
+```{r CATEGORICAL}
+apply(data2[,descData$variable[descData$tipo == "categorical"]], 2, table, useNA = "i")
+
+```
+
+### VISUALIZACIÓN
+
+Es gracias a esta visualización de los valores donde conseguimos identifcar el problema mencionado en el apartado de limpieza de datos, representamos aquí el porcentaje de los valores que se incluye dentro de cada categoría de cada una de las variables
+
+```{r}
+apply(data2[,descData$variable[descData$tipo == "categorical"]], 2,
+      function (x) round(100*table(x)/sum(table(x)), 2))
+apply(data2[,descData$variable[descData$tipo == "numerical"]], 2,
+      function (x) round(100*table(x)/sum(table(x)), 2))
+```
+
+### IDEA INICIAL DE TRANSFORMAR LAS VARIBALES CATEGÓRICAS (NO EJECUTAR)
+
+```{r, eval = FALSE}
+
+m1 = model.matrix(~ 0 + Marca, data = data2) m2 = model.matrix(~ 0 + Cpu, data = data2) m3 = model.matrix(~ 0 + Resolucion_Pantalla, data = data2) m4 = model.matrix(~ 0 + Sistema_Operativo, data = data2) m5 = model.matrix(~ 0 + Tipo_RAM, data = data2) m6 = model.matrix(~ 0 + Tipo_pantalla, data = data2) m7 = model.matrix(~ 0 + Sensor_1, data = data2) m8 = model.matrix(~ 0 + Tipo_1, data = data2) m9 = model.matrix(~ 0 + Tipo_camara_2, data = data2) m10 = model.matrix(~ 0 + Sensor_2, data = data2) m11 = model.matrix(~ 0 + Tipo_2, data = data2) m12 = model.matrix(~ 0 + Tipo_camara_3, data = data2) m13 = model.matrix(~ 0 + Sensor_3, data = data2) m14 = model.matrix(~ 0 + Tipo_3, data = data2)
+
+data3 = data2[,setdiff(colnames(data2), descData$variable[descData$tipo == "categorical"])]
+
+descData3 = descData[colnames(data3),] data3 = data.frame(data3, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14) descData3 = rbind(descData3, data.frame("variable" = c(colnames(m1), colnames(m2), colnames(m3), colnames(m4), colnames(m5), colnames(m6), colnames(m7), colnames(m8), colnames(m9), colnames(m10), colnames(m11), colnames(m12), colnames(m13), colnames(m14)), "tipo" = "binary")) rownames(descData3) = descData3$variable descData3
+
+```
+
+### VISUALIZACIÓN DE FALTANTES
+
+Con tal de hacernos una idea de si ha funcionado la transformación a valores nulos, visualizamos el tipo de variable, el número de nulos que posee y el porcentaje de nulos incluidos de cada una de las variables.
+
+Esto nos permite saber donde tenemos más problemas a la hora de sacar conclusiones o de si podemos realizar alguna tarea para mejorar esta situación.
+
+```{r FALTANTES}
+numNA = apply(data2, 2, function(x) sum(is.na(x)))
+percNA = round(100*apply(data2, 2, function(x) mean(is.na(x))), 2)
+tablaNA = data.frame("tipo" = descData[,-1], numNA, percNA)
+head(tablaNA, 59)
+
+
+```
+
+### FICHERO FINAL
+
+Como podemos observar, se nos quedan una gran cantidad de valores nulos en aquellos elementos referidos a las especificaciones de las cámaras,s sobretodo en aquellas que son secundarias o no son la principal, ya que no todos los dispositivos las poseen.
+
+Encontramos la solución a esto con la creación de la variable de "número de cámaras" que nos permitirá distinguir los móviles por este atributo, por otra parte el resto de valores faltantes han sido introducidos a mano ya que no presentaba dificultad encontrarlos, simplemente la página utilizada carecía de ellos.
+
+```{r}
+write.csv(data2, "res.csv", row.names = TRUE)
+
+```
+
+### CATEGORIZACIÓN DE VARIABLES
+
+Una vez agregado los valores faltantes relativos al precio, procederemos con el archivo final a categorizar algunas variables, ya que nos permitiran más adelante generar visualización más significativas y comprender mejor nuestros resultados.
+
+```{r}
+
+res_final = read.csv("res_limpio.csv", sep=";", as.is=FALSE)
+
+res_final$categoria_precio = cut(res_final$Precio, breaks = c(0, 250, 500, 750,Inf),labels = c("Precio Bajo", "Precio medio", "Precio alto", "Precio premium"))
+
+head(res_final)
+```
+
+```{r}
+
+write.csv(res_final, "specs_final.csv", row.names = TRUE)
+```

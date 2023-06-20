@@ -1,0 +1,247 @@
+---
+title: "Cllustering_proyecto"
+output: html_document
+---
+
+## CLUSTERING
+
+Cargamos librerías
+
+```{r, warning=FALSE}
+library(ggplot2)
+library(reshape2)
+library(cluster)
+library(knitr)
+library("purrr")
+library(FactoMineR)
+library(factoextra)
+library(NbClust)
+library(clValid)
+library(lubridate)
+library(Rtsne)
+library(magrittr)
+library(dplyr)
+library(plotly)
+library(fpc)
+```
+
+Leemos los datos ya limpiados
+
+```{r}
+data = read.csv("res_limpio.csv", sep=";", as.is=FALSE)
+head(data)
+```
+
+Vamos a empezar a aplicar el clustering. Al tener un data frame con variables categóricas y numéricas vamos a utilizar la distancia de gower, pues se trata de una distancia de similitud y permite ver qué tan distintos son dos registros. El inconveniente es que al usar un dataset mixto no podemos usar el algoritmo K-medias al necesitar calcular la media aritmética de los registros. Por lo tanto vamos a utilizar dos metodos jerárquicos, el de Ward y la media, y K-medoides.
+
+En primer lugar calcularemos la distancia de Gower para nuestros datos eliminando variables con información repetitiva.
+
+```{r}
+data[62,"Apertura_1"] = 1.5
+data$Apertura_1 <- as.numeric(as.character(data$Apertura_1))
+data$TamaÃ.o_pixel_1 <- as.numeric(data$TamaÃ.o_pixel_1)
+```
+
+```{r, warning=FALSE}
+data2= data[,setdiff(colnames(data), c("Marca","Val_Ki","Pantalla","Cpu","Sistema_Operativo","Tipo_RAM", "Bateria",
+"Val_Usu", "Resolucion_pantalla", "Sensor_1", "TamaÃ.o_pixel_1",                                  "Tipo_camara_2","Resolucion_2","Sensor_2","Tipo_2","Apertura_2","TamaÃ.o_pixel_2","TamaÃ.o__sensor_2",
+"Tipo_camara_3","Resolucion_3","Sensor_3","Tipo_3","Apertura_3","TamaÃ.o_pixel_3","TamaÃ.o_sensor_3"))]
+data3 = as.data.frame(unclass(data2),stringsAsFactors=TRUE)
+gower_df <- daisy(data3, metric = "gower", type = list(logratio = 3))
+summary(gower_df)
+```
+
+Vemos los móviles que más se parecen entre sí, y los que más se diferencian.
+
+```{r}
+par(mfrow=c(1,2))
+gower_mat <- as.matrix(gower_df)
+
+data3[which(gower_mat == min(gower_mat[gower_mat != min(gower_mat)]),
+        arr.ind = TRUE)[1, ],]
+
+data3[which(gower_mat == max(gower_mat[gower_mat != max(gower_mat)]),
+        arr.ind = TRUE)[1, ],]
+```
+
+Generamos un gráfico de correlación para ver si existe tendencia de agrupación en nuestros datos. Podemos apreciar que sí existe y hay un cluster grande y varios de tamaño bastante menor.
+
+```{r}
+
+fviz_dist(gower_df, show_labels = FALSE,
+          gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+```
+
+### Clustering jerárquico: método de Ward y la media.
+
+Vamos a empezar el clustering aplicando los dos métodos jerárquicos.
+
+Para obtener el número óptimo de clusters con los métodos jerárquicos de Ward y la media vamos a utilizar una función obtenida de <https://towardsdatascience.com/hierarchical-clustering-on-categorical-data-in-r-a27e578f2995> . Esta función nos devuelve la suma de cuadrados intracluster y el coeficiente de silhouette para cada número de clusters en nuestros métodos de partición, permitiéndonos así elegir el número de clusters de forma más eficiente e intuitiva.
+
+```{r}
+
+cstats.table <- function(dist, tree, k) {
+clust.assess <- c("cluster.number","n","within.cluster.ss","average.within","average.between",
+                  "wb.ratio","dunn2","avg.silwidth")
+clust.size <- c("cluster.size")
+stats.names <- c()
+row.clust <- c()
+output.stats <- matrix(ncol = k, nrow = length(clust.assess))
+cluster.sizes <- matrix(ncol = k, nrow = k)
+for(i in c(1:k)){
+  row.clust[i] <- paste("Cluster-", i, " size")
+}
+
+for(i in c(2:k)){
+  stats.names[i] <- paste("Test", i-1)
+  
+  for(j in seq_along(clust.assess)){
+    output.stats[j, i] <- unlist(cluster.stats(d = dist, clustering = cutree(tree, k = i))[clust.assess])[j]
+    
+  }
+  
+  for(d in 1:k) {
+    cluster.sizes[d, i] <- unlist(cluster.stats(d = dist, clustering = cutree(tree, k = i))[clust.size])[d]
+    dim(cluster.sizes[d, i]) <- c(length(cluster.sizes[i]), 1)
+    cluster.sizes[d, i]
+    
+  }
+}
+
+output.stats.df <- data.frame(output.stats)
+cluster.sizes <- data.frame(cluster.sizes)
+cluster.sizes[is.na(cluster.sizes)] <- 0
+rows.all <- c(clust.assess, row.clust)
+# rownames(output.stats.df) <- clust.assess
+output <- rbind(output.stats.df, cluster.sizes)[ ,-1]
+colnames(output) <- stats.names[2:k]
+rownames(output) <- rows.all
+is.num <- sapply(output, is.numeric)
+output[is.num] <- lapply(output[is.num], round, 2)
+output
+}
+```
+
+```{r}
+ward_clust = hclust(gower_df, method="ward.D2")
+average_clust = hclust(gower_df, method="average")
+```
+
+```{r}
+stats_ward = cstats.table(gower_df, ward_clust, 15); stats_ward
+stats_average = cstats.table(gower_df, average_clust, 15); stats_average
+```
+
+Para el método de Ward vamos a seleccionar 6 clusters, mientras que para el método de la media escogeremos 5, ya que son los puntos donde obtenemos un buen coeficiente de silhouette y la suma de cuadrados intracluster ha bajado. Podemos observar que el método de la media nos devuelve un cluster con sólo un individuo.
+
+```{r}
+ward_groups <- cutree(ward_clust, k=6); table(ward_groups)
+average_groups <- cutree(average_clust, k=5); table(average_groups)
+```
+
+Observamos que el móvil del cluster con un solo individuo, es un Sony Xperia 1, uno de los móviles con menos prestaciones.
+
+```{r}
+data3[which(average_groups == 5),]
+data3[which(average_groups == 4),]
+data3[which(average_groups == 2),]
+data3[which(ward_groups == 3),]
+
+```
+
+### K-medoides.
+
+Para obtener el número ideal de clusters hacemos uso del coeficiente de silhouette. En este caso, observando la gráfica, podemos considerar que es 8.
+
+```{r}
+silhouette <- c()
+silhouette = c(silhouette, NA)
+for(i in 2:15){
+  pam_clusters = pam(as.matrix(gower_df),
+                 diss = TRUE,
+                 k = i)
+  silhouette = c(silhouette ,pam_clusters$silinfo$avg.width)
+}
+plot(1:15, silhouette,
+     xlab = "Clusters",
+     ylab = "Silhouette Width")
+lines(1:15, silhouette)
+```
+
+•Realizamos el k-medoides para 8 clusters (por el coeficiente de silhouette) y obtenemos los medoides.
+
+```{r}
+pam_steam = pam(gower_df, diss = TRUE, k = 7)
+data3[pam_steam$medoids, ]
+```
+
+### Selección del mejor método.
+
+Ahora comparamos los tres clustering que hemos realizado calculando el coeficiente de silhouette para cada uno de los individuos para encontrar qué método tiene menos individuos con coeficiente negativo.
+
+Como podemos observar, K-medoides es el método que más coeficientes negativos tiene mientras los métodos de Ward y la media obtienen un número similar de individuos mal colocados. Nos quedamos con el [***metodo de Ward***]{.underline}, ya que observamos menos individuos mal colocados además de tener sentido el hecho de colocar a los extremos en su propio cluster.
+
+```{r}
+par(mfrow=c(1,3))
+plot(silhouette(pam_steam$cluster, gower_df), col=rainbow(7), border=NA, main = "K-MEDOIDES")
+plot(silhouette(ward_groups, gower_df), col=rainbow(6), border=NA, main = "WARD")
+plot(silhouette(average_groups, gower_df), col=rainbow(5), border=NA, main = "AVERAGE")
+```
+
+### Representación de los clusters.
+
+Para representar los datos vamos a generar un T-SNE con nuestros datos que condense la información en tres dimensiones y representar las ocurrencias sobre él. En este caso preferimos esta técnica a la realización de un PCA o un AFC dada la cantidad de variables categóricas y de variables númericas, pues hay más o menos la mitad de cada tipo y todas son relevantes e interesantes para el análisis. Con esto, reducimos las dimensiones manteniendo las distancias reales entre individuos. De esta forma, se ven los clusters.
+
+```{r}
+tsne_object <- Rtsne(gower_df, is_distance = TRUE, dims = 3)
+tsne_df <- tsne_object$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y", "Z")) %>%
+  mutate(cluster = factor(ward_groups))
+```
+
+Como esperábamos, podemos apreciar claramente los distintos clusters tanto en la representación 3D como en la gráfica de dos dimensiones.
+
+```{r}
+plot_ly(x=tsne_df$X, y=tsne_df$Y, z=tsne_df$Z, size = I(15), type="scatter3d", mode="markers", color=tsne_df$cluster)
+
+plot_ly(x=tsne_df$X, y=tsne_df$Y, size = I(15), type="scatter", mode="markers", color=tsne_df$cluster)
+```
+
+Vamos a generar ahora la media de cada variable numérica en cada uno de los clusters y después centrar esa información y compararla mediante un gráfico de líneas.
+
+```{r}
+num_data = data3[,unlist(lapply(data3, is.numeric))]
+mediasCluster = aggregate(num_data, by = list("cluster" = ward_groups), mean)[,-1]
+rownames(mediasCluster) = paste0("c",1:6)
+mediasCluster1 = data.frame(t(round(mediasCluster,2))); mediasCluster1
+mediasCluster2 = data.frame(t(scale(round(mediasCluster,2)))); mediasCluster2
+```
+
+En el gráfico podemos observar que hay ciertos grupos o parejas de líneas que siguen tendencias similares. Por ejemplo, las líneas de los clusters 7 y 8 toman valores similares o incluso idénticos en varias ocasiones, imitando una las subidas y bajadas de la otra y viceversa. También en el grupo de los clusters 4 y 5 se observa este fenómeno. Además, las líneas correspondientes a los clusters 1 y 10 parecen estar inversamente relacionadas.
+
+```{r}
+matplot(mediasCluster2, type = "l", col = c("#32a852","#3260a8","#f2c233","#e01227","#a212e0","#e06812"), ylab = "", xlab = "", lwd = 2,
+        lty = 1, main = "Perfil medio de los clusters", xaxt = "n")
+axis(side = 1, at = 1:ncol(num_data), labels = colnames(num_data), las = 2)
+
+```
+
+```{r}
+phone_clusts <- cbind(data3, ward_groups)
+phone_clusts
+```
+
+### ESTUDIAMOS LAS VARIABLES CATEGÓRICAS QUE MÁS SE REPITEN EN CADA CLUSTER
+
+Tanto en el cluster 1 como en el 2, vemos que la mayoría de los móviles tienen estabilización óptica y el tipo de sensor es "CMOS". En los clusters 3 y 4, los dispositivos también cuentan con estabilización óptica, aunque el tipo de sensor que usan es "CMOSBSI" y "ISOCELL", respectivamente. En el cluster 5, la mitad de los teléfonos tienen estabilización óptica, mientras que la otra mitad no cuentan con ella; cosa que no ocurre con los móviles del cluster 6, pues solamente hay uno que sí dispone de la estabilización óptica.
+
+```{r}
+phone_clusts[phone_clusts$ward_groups==1,c("Estabilizacion_optica","Tipo_1")]
+phone_clusts[phone_clusts$ward_groups==2,c("Estabilizacion_optica","Tipo_1")]
+phone_clusts[phone_clusts$ward_groups==3,c("Estabilizacion_optica","Tipo_1")]
+phone_clusts[phone_clusts$ward_groups==4,c("Estabilizacion_optica","Tipo_1")]
+phone_clusts[phone_clusts$ward_groups==5,c("Estabilizacion_optica","Tipo_1")]
+phone_clusts[phone_clusts$ward_groups==6,c("Estabilizacion_optica","Tipo_1")]
+```

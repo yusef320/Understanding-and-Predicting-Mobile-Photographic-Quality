@@ -1,0 +1,639 @@
+---
+title: "Analaisis de los datos."
+output: html_document
+---
+
+```{r Librerias, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(textdata)
+library(tm)
+library(lubridate)
+library(zoo)
+library(scales)
+library(gridExtra)
+library(ggplot2)
+library(dplyr)
+library(psych)
+library(janeaustenr)
+library(wordcloud)
+library(wordtreer)
+
+```
+
+Cargamos los ficheros de datos que vamos a utilizar.
+
+```{r Carga de datos}
+specs = read.csv("res_limpio.csv", sep=";", as.is=FALSE)
+reviews = read.csv("english_reviews.csv", sep=";", as.is=TRUE)
+head(specs)
+```
+
+### Análisis exploratorio.
+
+El primero de los análisis que vamos a realizar sobre nuestros datos en generar una matriz de correlaciones con todas las variables numéricas del archivo dxo_and_specs. Al contar con bastantes variables vamos a exportarlo para visualizarlo fuera de rstudio.
+
+```{r,warning=FALSE}
+specs_n = specs[,unlist(lapply(specs, is.numeric))]
+png(file="correlacion_dxo_specs.png",
+width=2000, height=1500)
+corPlot(specs_n,cex=1,xlas=2, main = "Matriz de correlación dxo_and_specs")
+dev.off()
+```
+
+A contintinuación ver que tan fracuentes son los sensores, cuales son los más usados y si existe un modelo predominante entre nuestros dipositivos. Se puede observar que existen 5 sensores que destacan entre los demás, pero ningun sensor que domine entre nuestros dipositvos.
+
+```{r}
+ggplot(specs, aes(x = Sensor_1)) + geom_bar()+ scale_x_discrete(guide = guide_axis(angle = 90))
+```
+
+También generamos un gráfico de caja y bigotes para todas las variables númericas relevantes y observamos que no existen datos anómalos reales (ya que los dos dispositovos por debajo en la puntuación de camara son moviles de gama baja y los dos moviles con más RAM que lo normal son dispositivos premium).
+
+```{r}
+
+p1 = ggplot(specs, aes(x = Precio)) + geom_boxplot()+labs(x = "Precio") + theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())
+p2 = ggplot(specs, aes(x = Resolucion_1)) + geom_boxplot()+labs(x = "Resolución del sensor")  + theme(axis.text.y=element_blank(),axis.ticks.y=element_blank()) 
+p3 = ggplot(specs, aes(x = TamaÃ.o_pixel_1)) + geom_boxplot()+labs(x = "Tamaño del pixel") + theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())
+p4 =ggplot(specs, aes(x = final_score)) + geom_boxplot()+labs(x = "Puntuación de la cámara")  + theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())
+p5 = ggplot(specs, aes(x = Puntuacion_CPU)) + geom_boxplot()+labs(x = "Potencia bruta de la CPU")  + theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())
+p6 = ggplot(specs, aes(x = Ram)) + geom_boxplot()+labs(x = "Tamaño de la RAM")   + theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())
+grid.arrange(p1,p2,p3,p4,p5,p6, ncol=3)
+```
+
+Observamos la distribución de nuestros dispositivos por categoría de precio.
+
+```{r}
+#ggplot(specs, aes(x =categoria_precio)) + geom_bar() + labs(x = "Categoría de precio") + labs(y = "Número de dispositivos")
+```
+
+### Análisis de sentimientos.
+
+Cargamos el léxico que vamos a utilizar para nuestro análisis. Es la mejor opción que hemos encontrado, ya que posee un gran numéro de palabras y las puntua en una gran escala por el siginificado de la palabra.
+
+```{r}
+lexicon = get_sentiments("afinn") 
+min(lexicon$value)
+max(lexicon$value)
+length(lexicon$word)
+```
+
+Generamos nuestro propio léxico relacionado con la fotografía, este nos servira para detectar comentarios con contenido relacionado con la fotografía.
+
+```{r}
+cam_lex_names = c("aperture","focus", "exposure","bokeh", "camera", "color","colour", "contrast", "calibration", "distortion", "flash", "focal", "iso", "jpeg", "landscape", "lens", "macro","noise", "portrait", "panoramic", "night", "zoom", "telephoto", "lenses", "texture", "saturation","shadow", "shadows","cameras")
+
+cam_lex_punt = rep(1, length(cam_lex_names))
+
+cam_lex = data.frame(cam_lex_names,cam_lex_punt)
+names(cam_lex) = c("word", "cam")
+```
+
+Generamos una columna con el index que nos va a servir para unir las puntuaciones del ananlisis de sentimientos.
+
+```{r}
+reviews = tibble::rowid_to_column(reviews, "index")
+head(reviews)
+```
+
+Separamos todas las palabras de nuestros comentarios y las buscamos en nuestro léxico de sentimientos para darle la puntuación que le corresponde.
+
+```{r}
+reviews_punt =
+  reviews %>%
+  unnest_tokens(input = "comentario", output = "word") %>%  
+  inner_join(lexicon, ., by = "word") 
+head(reviews_punt)
+```
+
+Ahora hacemos lo mismo con las palabras relacionadas con la fotografía, asi podemos encontrar los comentarios relacionados con la fotografía.
+
+```{r}
+
+reviews_cam =
+  reviews %>%
+  unnest_tokens(input = "comentario", output = "word") %>%  
+  inner_join(cam_lex, ., by = "word") 
+
+comentarios_camara =
+  reviews_cam %>%
+  group_by(index) %>%
+  summarise(word_cam = sum(cam)) %>%  # Sumamos el número de palabras relacionadas con la fotografía
+  left_join(reviews, ., by = "index")
+
+comentarios_camara = na.omit(comentarios_camara) 
+
+#Nos quedamos solo con los comentarios relacionados minimamente con la fotografía
+
+comentarios_camara = comentarios_camara[(comentarios_camara$word_cam>=1),]
+comentarios_camara
+```
+
+Ahora volvemos a juntar los comentarios para calcular los sentimientos medios que trasmiten, ademas de mantener solo los comentarios que contengan palabra de nuestro léxico fotográfico.
+
+```{r}
+comentarios <-
+  reviews_punt %>%
+  group_by(index) %>%
+  summarise(sentimiento = mean(value)) %>%  # la media de puntuación es el sentimiento medio
+  left_join(reviews, ., by = "index")
+
+comentarios = comentarios[comentarios$index %in% comentarios_camara$index,]
+comentarios = left_join(comentarios, comentarios_camara)
+comentarios$index = NULL
+comentarios
+```
+
+Ahora vamos a juntar algunas especificaciones a los comentarios para poder realizar análisis cruzados con los resultados de nuestro analisis de sentimientos.
+
+```{r}
+#dxo  = read.csv("dxo_and_specs.csv", sep=";", as.is=FALSE) #Usamos la version antigua del fichero
+dxo = specs[,c("Device","final_score", "Photo","Video","Zoom","Puntuacion_CPU", "Precio","Resolucion_1" ,"Numero_camaras")]
+names(dxo)= c("device", "final_score","photo","video","zoom","puntuacion_CPU", "precio","resolucion_1","numero_Camaras")
+
+head(dxo)
+```
+
+```{r}
+comentarios <-
+  dxo %>%
+  left_join(comentarios, ., by = "device")
+
+head(comentarios)
+```
+
+Ahora centramos los datos de las valoraciones y los sentimientos, además de factorizar la valoración y la puntuación final.
+
+```{r}
+comentarios_centrados = comentarios #na.omit(comentarios) 
+colSums((is.na(comentarios_centrados)))
+comentarios_centrados$sentimiento = comentarios_centrados$sentimiento/5
+comentarios_centrados$valoracion = (comentarios_centrados$valoracion-3)/2
+
+comentarios_centrados$fact_val = as.factor(comentarios_centrados$valoracion)
+
+comentarios_centrados$final_score
+
+comentarios_centrados
+```
+
+Generamos un gráfico de caja y bigotes para empezar a comprender nuestros comentarios y como interactuan los sentimiento y las valoraciones.
+
+```{r}
+ggplot(data = comentarios_centrados, aes(x=fact_val, y=sentimiento)) + geom_boxplot() + labs(x = "Puntuación comentario") + labs(y = "Sentimiento de los comentarios")
+```
+
+También generamos una matriz de correlaciones entre algunas de variables de nuestras variables del dataframe de especificaciones y nuestros comentarios. Vamos a usar unicamente los comentarios con más de 5 palabras de nuestro léxico fotográfico, para una mejor relación con las variables fotográficas.
+
+```{r}
+comentarios_camara2 = comentarios_centrados[(comentarios_centrados$word_cam>=0),]
+com_n = comentarios_camara2[,unlist(lapply(comentarios_camara2, is.numeric))]
+corPlot(com_n,cex=0.5,xlas=2, main = "Matriz de correlación análisis de sentimientos")
+
+```
+
+```{r}
+comentarios_camara2 = comentarios_centrados[(comentarios_centrados$word_cam>=4),]
+com_n = comentarios_camara2[,unlist(lapply(comentarios_camara2, is.numeric))]
+corPlot(com_n,cex=0.5,xlas=2, main = "Matriz de correlación con word_cam>=4 ")
+```
+
+### Estudio del contenido de los comentarios.
+
+#### Comentarios anómalos.
+
+Vamos a estudiar los comentarios anómalos que son considerados outliers por tener por debajo de lo nomal para la puntuación del usuario sobre el producto. Lo primero es calcular el primer cuartil y el rango intercuartilico para cada una de las distintas valoraciones de los usuarios.
+
+```{r}
+com_siNA = comentarios_centrados[complete.cases(comentarios_centrados),]
+
+anomal_summary = comentarios_centrados%>%
+  group_by(fact_val) %>%
+  summarise(Min = min(sentimiento,na.rm = TRUE ),
+            Max = max(sentimiento, na.rm = TRUE ),
+            Median = median(sentimiento, na.rm = TRUE ),
+            IQRange = IQR(sentimiento, na.rm = TRUE ),
+            Q1 = quantile(sentimiento, prob=c(.25), na.rm = TRUE))
+            
+anomal_summary
+
+```
+
+Una vez obetenemos el Q1 y el IQRange, los utilizamos para obtener los comentarios anomalos para cada una de las valoraciones y juntarlos todos en único dataframe.
+
+```{r}
+
+comanomal_1 = comentarios_centrados[comentarios_centrados$valoracion == 1,][which(comentarios_centrados[comentarios_centrados$valoracion == 1,]$sentimiento <= 0.231-1.5*0.34),]
+
+comanomal_0.5 = comentarios_centrados[comentarios_centrados$valoracion == 0.5,][which(comentarios_centrados[comentarios_centrados$valoracion == 0.5,]$sentimiento <= 0.28-1.5*0.20),]
+
+comanomal_0 = comentarios_centrados[comentarios_centrados$valoracion == 0,][which(comentarios_centrados[comentarios_centrados$valoracion == 0,]$sentimiento <= 0.277-1.5*0.05),]
+
+comanomal_neg0.5 = comentarios_centrados[comentarios_centrados$valoracion == -0.5,][which(comentarios_centrados[comentarios_centrados$valoracion == -0.5,]$sentimiento <= -0.278-1.5*0.05),]
+
+comanomal_neg1 = comentarios_centrados[comentarios_centrados$valoracion == -1,][which(comentarios_centrados[comentarios_centrados$valoracion == -1,]$sentimiento <= -0.32-1.5*0.2),]
+
+
+comanomal = rbind(comanomal_1,comanomal_0.5, comanomal_0, comanomal_neg0.5, comanomal_neg1)
+
+```
+
+Y para realizar un estudio sobre ellos, procedemos a unir todos los comentarios en un único texto.
+
+```{r}
+comanomal_text = paste(comanomal$comentario, collapse = ' ')
+```
+
+Usando la función tm limpiamos el texto, eliminando la puntuación, los números y las stopwords.
+
+```{r}
+
+comanomal_text = VCorpus(VectorSource(comanomal_text))
+comanomal_limpios = tm_map(comanomal_text, removePunctuation)
+comanomal_limpios = tm_map(comanomal_limpios, content_transformer(tolower))
+comanomal_limpios = tm_map(comanomal_limpios, removeNumbers)
+comanomal_limpios = tm_map(comanomal_limpios, stripWhitespace)
+comanomal_limpios = tm_map(comanomal_limpios, removeWords, stopwords('english'))
+```
+
+##### Resultado de los comentarios anomalos.
+
+Teniendo el texto ya limpio, podemos empezar a calcular las palabras más frecuentes y los trigramas más usados.
+
+```{r}
+m <- as.matrix(TermDocumentMatrix(comanomal_limpios))
+v <- sort(rowSums(m), decreasing=TRUE)
+freq_pal = data.frame(v)
+freq_pal <- tibble::rownames_to_column(freq_pal, "VALUE")
+colnames(freq_pal) = c("Palabra", "Apariciones")
+freq_pal
+```
+
+```{r}
+plt <- ggplot(freq_pal[1:20,]) +
+  geom_col(aes(Palabra, Apariciones))+ scale_x_discrete(guide = guide_axis(angle = 90))
+
+plt
+```
+
+```{r}
+wordcloud(comanomal_limpios, scale = c(3, 1), min.freq = 300, colors = rainbow(20))
+```
+
+Ahora vamos a calcular los 3-gramas más usados.
+
+```{r}
+ngram_token <-  function(x) unlist(lapply(ngrams(words(x), 3), paste, collapse=" "), use.names=FALSE)
+
+# Pass into TDM control argument
+tdm <- TermDocumentMatrix(comanomal_limpios, control = list(tokenize = ngram_token))
+freq <- rowSums(as.matrix(tdm))
+tdm_freq <- data.frame(term = names(freq), occurrences = freq)
+tdm_freq <-tdm_freq[order(-tdm_freq$occurrences),]
+rownames(tdm_freq)=NULL
+tdm_freq
+```
+
+Como conclusión de esta parte el estudio podemos decir que los comnetarios anomalos son solo comentarios mal posicionados por los usuarios al darle la puntuación, ya que todos los trigramas más frecuente que encontramos son relativos a problemas con el producto.
+
+#### Comentarios por nivel de valoración y sentimientos.
+
+Para esto vamos a hacer uso de los comentarios relacionados con la fotografía, por lo que solo seleccionamos los comentarios con 4 o más palabras de nuestro léxico de fotografía.
+
+```{r}
+comentarios_camara_4 = comentarios_centrados[(comentarios_centrados$word_cam>=4),]
+```
+
+Creamos las funciones para limpiar y unificar los comentarios, calcular el número de repeticiones de las palabras y los 3-gramas con su frecuencia.
+
+```{r}
+#Calcula los 3-gramas
+ngram_token <-  function(x) unlist(lapply(ngrams(words(x), 3), paste, collapse=" "), use.names=FALSE)
+
+#Unifica, limpia y elimina las palabras recurrentes en nuestros comentarios 
+clean_and_join_comentarios <- function(df){
+  com_text = paste(df$comentario, collapse = ' ')
+  com_text = VCorpus(VectorSource(com_text))
+  com_text = tm_map(com_text, removePunctuation)
+  com_text = tm_map(com_text, content_transformer(tolower))
+  com_text = tm_map(com_text, removeNumbers)
+  com_text = tm_map(com_text, stripWhitespace)
+  com_text = tm_map(com_text, removeWords, stopwords('english'))
+  return(com_text)
+}
+
+#Calcula la frecuencia de las palabras en nuestro texto y las ordena de mayor a menor 
+freq_df <- function(com_text){
+  m <- as.matrix(TermDocumentMatrix(com_text))
+  v <- sort(rowSums(m), decreasing=TRUE)
+  freq_pal = data.frame(v)
+  freq_pal <- tibble::rownames_to_column(freq_pal, "VALUE")
+  colnames(freq_pal) = c("Palabra", "Apariciones")
+  return(freq_pal)
+  
+}
+
+#Calcula los 3-gramas en nuestro texto, su frecuencia y las ordena de mayor a menor
+gen_3gram <- function(com_text){
+  tdm <- TermDocumentMatrix(com_text, control = list(tokenize = ngram_token))
+  freq <- rowSums(as.matrix(tdm))
+  tdm_freq <- data.frame(term = names(freq), occurrences = freq)
+  tdm_freq <-tdm_freq[order(-tdm_freq$occurrences),]
+  rownames(tdm_freq)=NULL
+  return(tdm_freq) 
+  
+}
+
+```
+
+##### Comentarios por valoración otorgada.
+
+Ahora que poseemos las funciones necesarias y los datos con los comentarios relacionados con la fotografía, vamos a hacer uso de ellos y calcular tanto las palabras más repetidas como los 3-gramas más usados para cada uno de los niveles de valoración, al haber centrado nuestros datos corresponden -1 con 1 estrella y 1 con 5 estrellas.
+
+```{r}
+
+i2=1
+for (i in seq(-1, 1, by=0.5)){
+  nam <- paste("freq", i2, sep = "_")
+  nam2 <- paste("3_gram", i2, sep = "_")
+  i2=i2+1
+  
+  texto = clean_and_join_comentarios(comentarios_camara_4[comentarios_camara_4$valoracion == i,])
+  
+  assign(nam, freq_df(texto))
+  assign(nam2, gen_3gram(texto))
+  
+}
+texto_general = clean_and_join_comentarios(comentarios_centrados)
+freq_general = freq_df(texto_general)
+gram3_general = gen_3gram(texto_general) 
+  
+```
+
+Ahora visualizamos para cada uno de las posibles valoraciones las n-gramas más usados.
+
+```{r}
+`3_gram_1` #1 estrella
+`3_gram_2` #2 estrellas
+`3_gram_3` #3 estrellas
+`3_gram_4` #4 estrellas
+`3_gram_5` #5 estrellas
+```
+
+Ahora lo mismo con las palabras más repetidas. Vemos que encontramos bastantes palabras repetidas entre nuestre los distintas puntuaciones, por a dejar solo las palabras unicas para cada rango de puntuacion.
+
+```{r}
+freq_1 #1 estrella
+freq_2 #2 estrellas
+freq_3 #3 estrellas
+freq_4 #4 estrellas
+freq_5 #5 estrellas
+```
+
+```{r}
+freq_1[!freq_1$Palabra %in% freq_general$Palabra[1:35],]
+freq_2[!freq_2$Palabra %in% freq_general$Palabra[1:35],]
+freq_3[!freq_3$Palabra %in% freq_general$Palabra[1:35],]
+freq_4[!freq_4$Palabra %in% freq_general$Palabra[1:35],]
+freq_5[!freq_5$Palabra %in% c("camera", "phone","battery"),]
+
+```
+
+Dentro de esta parte podemos deducir que la mayoria de comentarios negativos relacionados con la fotografía están relacionados con las cámaras secundarias.
+
+##### Comentarios por sentimientos.
+
+Ahora separaremos los comentarios por sentimientos y para grupo calcularemos los trigramas, las palabras más frecuentes y también los wordtree con la palabra lente como foco, ya que en el apartado anterior ya hemos visto como la mayoria de comentarios negativos estaban relacionado con las camaras secundarias.
+
+```{r}
+summary(comentarios_camara_4$sentimiento)
+```
+
+```{r}
+
+com_sent1 = comentarios_camara_4[comentarios_camara_4$sentimiento<0,]
+
+texto_com_sent1 = clean_and_join_comentarios(com_sent1)
+freq_com_sent1 = freq_df(texto_com_sent1)
+gram3_com_sent1 = gen_3gram(texto_com_sent1) 
+
+freq_com_sent1[!freq_com_sent1$Palabra %in% freq_general$Palabra[1:35],]
+gram3_com_sent1
+
+ggplot(head(gram3_com_sent1,25), aes(term,occurrences)) +
+  geom_bar(stat = "identity", fill = "#1bdbde") + coord_flip() + ylab("Apariciones") +theme(axis.title.y = element_blank())+
+  ggtitle("3-gramas más frecuentes para comentarios con peor sentimientos")
+
+```
+
+```{r }
+wordtree(text=com_sent1$comentario,targetWord = "camera",direction="double",Number_words = 3,fileName="thingie.html")
+browseURL("thingie.html")
+```
+
+```{r}
+com_sent2 = comentarios_camara_4[(comentarios_camara_4$sentimiento>=0 & comentarios_camara_4$sentimiento<0.5)  ,]
+
+texto_com_sent2 = clean_and_join_comentarios(com_sent2)
+freq_com_sent2 = freq_df(texto_com_sent2)
+gram3_com_sent2 = gen_3gram(texto_com_sent2) 
+
+freq_com_sent2[!freq_com_sent2$Palabra %in% freq_general$Palabra[1:35],]
+gram3_com_sent2
+```
+
+```{r}
+wordtree(text=com_sent2$comentario,targetWord = "lens",direction="double",Number_words = 3,fileName="thingie.html")
+browseURL("thingie.html")
+```
+
+```{r}
+com_sent3 = comentarios_camara_4[(comentarios_camara_4$sentimiento>=0.5)  ,]
+
+texto_com_sent3 = clean_and_join_comentarios(com_sent3)
+freq_com_sent3 = freq_df(texto_com_sent3)
+gram3_com_sent3 = gen_3gram(texto_com_sent3)
+
+freq_com_sent3[!freq_com_sent3$Palabra %in% freq_general$Palabra[1:35],]
+gram3_com_sent3
+```
+
+```{r}
+wordtree(text=com_sent3$comentario,targetWord = "lens",direction="double",Number_words = 3,fileName="thingie.html")
+browseURL("thingie.html")
+```
+
+Después de observar los wordtrees y los tri-gramas podemos confirmar lo que estabamos lo que nos encontramos en el apartado anterior, que la mayor queja de lo usuarios relacionada con la cámara de los usuarios son las camaras secundarias.
+
+### Predicción del sentimiento de los usuarios respecto a la cámara.
+
+Ahora, mediante un modelo de regresión vamos a explicar la satisfacción de los usuarios con la cámara en función de las especificaciones y los resultados de la cámara en el test fotográfico.
+
+Integramos nuestras bases de datos en un unico data-frame.
+
+```{r}
+
+com44 =comentarios_camara_4[, c("device","valoracion","sentimiento")]
+com44 =aggregate(com44[, 2:3], list(com44$device), mean)
+colnames(com44)[1] = "Device"
+s = specs[,-c(45:59)]
+s$Val_Ki = NULL
+s[62,"Apertura_1"]= 1.5
+s$Apertura_1 = as.numeric(as.character(s$Apertura_1))
+
+comentarios_class <-
+  s %>%
+  left_join(com44, ., by = "Device")
+
+
+comentarios_class2 = comentarios_class[,unlist(lapply(comentarios_class, is.numeric))]
+
+comentarios_class2$Bateria = NULL
+comentarios_class2$Pantalla = NULL
+```
+
+Nos quedamos solo con los casos completos.
+
+```{r, warning=FALSE}
+pred_sentimientos = comentarios_class2[complete.cases(comentarios_class2),][,-1]
+```
+
+Separamaos nuestros datos en test y train.
+
+```{r}
+set.seed(208) #208
+row.number <- sample(1:nrow(pred_sentimientos), 0.95*nrow(pred_sentimientos))
+train = pred_sentimientos[row.number,]
+test = pred_sentimientos[-row.number,]
+dim(train)
+dim(test)
+
+```
+
+Con los datos train generamos un primer modelo con todas las variables.
+
+```{r}
+
+model1 = lm(sentimiento~., data=train)
+summary(model1)
+```
+
+Mediante backward selection eliminamos la variables menos significativas para obtener el mejor modelo posible.
+
+```{r}
+step(model1, direction="backward")
+```
+
+Creamos el modelo generado por el algoritmo y comprobamos que los residuos siguen una distribución aleatoria y no existe heterecelasicidad en el modelo.
+
+```{r}
+model2 = lm(formula = sentimiento ~ Photo.Bokeh + Photo.Color + Photo.Preview + 
+    Video.Color + Video.Exposure + Video.Noise + Video.Stabilization + 
+    Video.Texture + Zoom + Puntuacion_CPU + Peso + Precio + Estabilizacion_optica, 
+    data = train)
+
+summary(model2)
+
+par(mfrow=c(2,2))
+plot(model2)
+par(mfrow=c(1,1))
+```
+
+Generamos un grafico de dispersion los residuos y las distintas variables para ver si existe una relación no lineal.
+
+```{r, warning=FALSE}
+##Plot the residual plot with all predictors.
+attach(train)
+require(gridExtra)
+
+plot1 = ggplot(train, aes(Photo.Bokeh  , residuals(model2))) + geom_point() + geom_smooth()
+plot2=ggplot(train, aes(Photo.Color, residuals(model2))) + geom_point() + geom_smooth()
+plot3=ggplot(train, aes(Photo.Preview, residuals(model2))) + geom_point() + geom_smooth()
+plot4=ggplot(train, aes(Video.Color , residuals(model2))) + geom_point() + geom_smooth()
+plot5=ggplot(train, aes(Video.Noise , residuals(model2))) + geom_point() + geom_smooth()
+plot6=ggplot(train, aes(Video.Texture , residuals(model2))) + geom_point() + geom_smooth()
+plot7=ggplot(train, aes(Video.Stabilization , residuals(model2))) + geom_point() + geom_smooth() +theme(axis.title.y = element_blank())
+plot8=ggplot(train, aes(Zoom , residuals(model2))) + geom_point() + geom_smooth() +theme(axis.title.y = element_blank())
+plot9=ggplot(train, aes(Peso , residuals(model2))) + geom_point() + geom_smooth()
+plot10=ggplot(train, aes(Precio , residuals(model2))) + geom_point() + geom_smooth()
+plot11=ggplot(train, aes(Puntuacion_CPU , residuals(model2))) + geom_point() + geom_smooth()
+plot12=ggplot(train, aes(Estabilizacion_optica , residuals(model2))) + geom_point() + geom_smooth()
+
+grid.arrange(plot1,plot2,plot3,plot4,plot5,plot6,ncol=3,nrow=2)
+grid.arrange(plot7,plot8,plot9,plot10,plot11,plot12,ncol=3,nrow=2)
+grid.arrange(plot7,plot8,ncol=2,nrow=1)
+```
+
+Observando los graficos anteriores, generamos un segundo con las varibles Zoom y Video.Stabilization al cuadrado.
+
+```{r}
+model3 = lm(formula = sentimiento ~ Photo.Bokeh + Photo.Color + Photo.Preview + 
+    Video.Color + Video.Exposure + Video.Noise + I(Video.Stabilization^2) + 
+    Video.Texture + I(Zoom^2) + Puntuacion_CPU + Peso + Precio + Estabilizacion_optica, 
+    data = train)
+summary(model3)
+par(mfrow=c(2,2))
+plot(model2)
+par(mfrow=c(1,1))
+
+```
+
+Ahora comparamos los dos modelos generados, y vemos que el modelo con dos variables cuadraticas tiene un menor RMSE, por lo que nos decantamos por ese modelo.
+
+```{r}
+pred1 <- predict(model3, newdata = test)
+rmse <- sqrt(sum((pred1 - test$sentimiento)^2)/length(test$sentimiento))
+c(RMSE = rmse, R2=summary(model3)$r.squared)
+```
+
+```{r}
+pred2 <- predict(model2, newdata = test)
+rmse <- sqrt(sum((pred2 - test$sentimiento)^2)/length(test$sentimiento))
+c(RMSE = rmse, R2=summary(model2)$r.squared)
+```
+
+Ahora, predecimos los moviles de nuestra base de datos sin comentarios para ver si las preducciones de nuestro modelo tienen sentido.
+
+```{r}
+restantes = specs[!specs$Device %in% com44[, 1],c("Device","Photo.Bokeh" , "Photo.Color" , "Video.Stabilization" , "Photo.Preview" , "Video.Exposure" , "Video.Color" , "Video.Exposure", "Video.Noise" , "Video.Texture" , "Zoom" , "Puntuacion_CPU" , "Peso" , "Precio" , "Video.Texture" , "Estabilizacion_optica", "Tipo_1")]
+
+restantes = restantes[complete.cases(restantes),]
+pred_restantes <- predict(model3, newdata = restantes)
+restantes$sentimientos = pred_restantes
+
+restantes[,c("sentimientos","Device")] # [23,"Device"]
+
+
+```
+
+Y por ultimo, generamos una string con el modelo resultante.
+
+```{r}
+library(MASS)
+library(dplyr)
+
+options(scipen=999)
+
+model_equation <- function(model, ...) {
+  format_args <- list(...)
+  
+  model_coeff <- model$coefficients
+  format_args$x <- abs(model$coefficients)
+  model_coeff_sign <- sign(model_coeff)
+  model_coeff_prefix <- case_when(model_coeff_sign == -1 ~ " - ",
+                                  model_coeff_sign == 1 ~ " + ",
+                                  model_coeff_sign == 0 ~ " + ")
+  model_eqn <- paste(strsplit(as.character(model$call$formula), "~")[[2]], # 'y'
+                     "=",
+                     paste(if_else(model_coeff[1]<0, "- ", ""),
+                           do.call(format, format_args)[1],
+                           paste(model_coeff_prefix[-1],
+                                 do.call(format, format_args)[-1],
+                                 " * ",
+                                 names(model_coeff[-1]),
+                                 sep = "", collapse = ""),
+                           sep = ""))
+  return(model_eqn)
+}
+
+model_equation(model3, digits = 3, trim = TRUE)
+```
